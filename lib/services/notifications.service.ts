@@ -1,17 +1,33 @@
 import { db } from "@/lib/db";
 import { invoices, products, salesOrders, purchaseOrders, quotations } from "@/lib/db/schema";
 import { eq, and, sql, or, lte, gte } from "drizzle-orm";
+import { unstable_cache } from "next/cache";
 import type { NotificationItem } from "@/components/layout/notification-bell";
 
-export async function generateNotifications(companyId: string, enabledModules: string[]): Promise<NotificationItem[]> {
+/**
+ * Wrap a promise with a timeout so a slow DB doesn't block page rendering.
+ * Resolves to `undefined` on timeout instead of rejecting the whole batch.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return Promise.race([
+        promise,
+        new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Notification query timed out after ${ms}ms`)), ms)
+        ),
+    ]);
+}
+
+async function _generateNotifications(companyId: string, enabledModules: string[]): Promise<NotificationItem[]> {
     const notifications: NotificationItem[] = [];
     const now = new Date();
     const queries: Promise<void>[] = [];
 
+    const QUERY_TIMEOUT = 5000; // 5s per query max
+
     // Overdue invoices
     if (enabledModules.includes("sales")) {
         queries.push(
-            db.select({
+            withTimeout(db.select({
                 count: sql<number>`count(*)::int`,
                 total: sql<string>`COALESCE(SUM(${invoices.balanceDue}::numeric), 0)::text`,
             })
@@ -38,13 +54,13 @@ export async function generateNotifications(companyId: string, enabledModules: s
                             read: false,
                         });
                     }
-                })
+                }), QUERY_TIMEOUT)
         );
 
         // Recent sales orders today
         const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         queries.push(
-            db.select({
+            withTimeout(db.select({
                 count: sql<number>`count(*)::int`,
                 total: sql<string>`COALESCE(SUM(${salesOrders.total}::numeric), 0)::text`,
             })
@@ -68,13 +84,13 @@ export async function generateNotifications(companyId: string, enabledModules: s
                             read: false,
                         });
                     }
-                })
+                }), QUERY_TIMEOUT)
         );
 
         // Expiring quotations (within 7 days)
         const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
         queries.push(
-            db.select({ count: sql<number>`count(*)::int` })
+            withTimeout(db.select({ count: sql<number>`count(*)::int` })
                 .from(quotations)
                 .where(and(
                     eq(quotations.companyId, companyId),
@@ -95,14 +111,14 @@ export async function generateNotifications(companyId: string, enabledModules: s
                             read: false,
                         });
                     }
-                })
+                }), QUERY_TIMEOUT)
         );
     }
 
     // Low stock alerts
     if (enabledModules.includes("inventory")) {
         queries.push(
-            db.select({ count: sql<number>`count(*)::int` })
+            withTimeout(db.select({ count: sql<number>`count(*)::int` })
                 .from(products)
                 .where(and(
                     eq(products.companyId, companyId),
@@ -124,14 +140,14 @@ export async function generateNotifications(companyId: string, enabledModules: s
                             read: false,
                         });
                     }
-                })
+                }), QUERY_TIMEOUT)
         );
     }
 
     // Pending purchase orders
     if (enabledModules.includes("purchase")) {
         queries.push(
-            db.select({ count: sql<number>`count(*)::int` })
+            withTimeout(db.select({ count: sql<number>`count(*)::int` })
                 .from(purchaseOrders)
                 .where(and(
                     eq(purchaseOrders.companyId, companyId),
@@ -150,13 +166,42 @@ export async function generateNotifications(companyId: string, enabledModules: s
                             read: false,
                         });
                     }
-                })
+                }), QUERY_TIMEOUT)
         );
     }
 
-    await Promise.all(queries);
+    // Run all queries concurrently; settle all so one failure doesn't break everything
+    const results = await Promise.allSettled(queries);
+    for (const result of results) {
+        if (result.status === "rejected") {
+            console.error("[Notifications] Query failed:", result.reason);
+        }
+    }
 
     // Sort: most recent first
     notifications.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     return notifications;
+}
+
+/**
+ * Cached version of generateNotifications.
+ * Revalidates every 60 seconds so notifications stay reasonably fresh
+ * without hammering the DB on every page navigation.
+ */
+const _cachedGenerateNotifications = unstable_cache(
+    _generateNotifications,
+    ["notifications"],
+    { revalidate: 60, tags: ["notifications"] }
+);
+
+/**
+ * Public entry point. Restores Date objects lost during JSON serialization
+ * performed by unstable_cache.
+ */
+export async function generateNotifications(
+    companyId: string,
+    enabledModules: string[]
+): Promise<NotificationItem[]> {
+    const items = await _cachedGenerateNotifications(companyId, enabledModules);
+    return items.map((n) => ({ ...n, createdAt: new Date(n.createdAt) }));
 }

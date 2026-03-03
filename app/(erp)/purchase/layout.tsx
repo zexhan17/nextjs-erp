@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { ShoppingBag, FileText, Receipt, CreditCard } from "lucide-react";
+import { ShoppingBag, FileText, Receipt, CreditCard, Mail } from "lucide-react";
 
 const purchaseNav = [
+    { title: "RFQs", href: "/purchase/rfqs", icon: Mail },
     { title: "Orders", href: "/purchase/orders", icon: ShoppingBag },
     { title: "Bills", href: "/purchase/bills", icon: FileText },
     { title: "Payments", href: "/purchase/payments", icon: CreditCard },

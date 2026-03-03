@@ -3,11 +3,28 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BookOpen, FileSpreadsheet, Calculator, CalendarDays } from "lucide-react";
+import {
+    LayoutDashboard,
+    BookOpen,
+    FileSpreadsheet,
+    Calculator,
+    CalendarDays,
+    BarChart3,
+    Receipt,
+    FileText,
+    CreditCard,
+    Landmark,
+} from "lucide-react";
 
 const accountingNav = [
-    { title: "Chart of Accounts", href: "/accounting/accounts", icon: BookOpen },
+    { title: "Dashboard", href: "/accounting/dashboard", icon: LayoutDashboard },
+    { title: "Invoices", href: "/accounting/invoices", icon: Receipt },
+    { title: "Bills", href: "/accounting/bills", icon: FileText },
+    { title: "Payments", href: "/accounting/payments", icon: CreditCard },
     { title: "Journal Entries", href: "/accounting/journal", icon: FileSpreadsheet },
+    { title: "Bank Reconciliation", href: "/accounting/bank-reconciliation", icon: Landmark },
+    { title: "Chart of Accounts", href: "/accounting/accounts", icon: BookOpen },
+    { title: "Reports", href: "/accounting/reports", icon: BarChart3 },
     { title: "Tax Rates", href: "/accounting/taxes", icon: Calculator },
     { title: "Fiscal Years", href: "/accounting/fiscal-years", icon: CalendarDays },
 ];

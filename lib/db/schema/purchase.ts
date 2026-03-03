@@ -37,6 +37,15 @@ export const vendorBillStatusEnum = pgEnum("vendor_bill_status", [
     "cancelled",
 ]);
 
+export const rfqStatusEnum = pgEnum("rfq_status", [
+    "draft",
+    "sent",
+    "quoted",
+    "accepted",
+    "rejected",
+    "expired",
+]);
+
 // ============================================================================
 // PURCHASE ORDERS
 // ============================================================================
@@ -208,6 +217,74 @@ export const vendorPayments = pgTable(
 );
 
 // ============================================================================
+// REQUEST FOR QUOTATION (RFQ)
+// ============================================================================
+
+export const rfqs = pgTable(
+    "rfqs",
+    {
+        id: uuid("id").defaultRandom().primaryKey(),
+        companyId: uuid("company_id")
+            .notNull()
+            .references(() => companies.id, { onDelete: "cascade" }),
+        number: varchar("number", { length: 50 }).notNull(), // e.g. RFQ-0001
+        vendorId: uuid("vendor_id")
+            .notNull()
+            .references(() => contacts.id),
+        status: rfqStatusEnum("status").default("draft").notNull(),
+
+        // Dates
+        date: timestamp("date", { withTimezone: true }).defaultNow().notNull(),
+        validUntil: timestamp("valid_until", { withTimezone: true }),
+
+        // Totals
+        subtotal: numeric("subtotal", { precision: 15, scale: 2 }).default("0").notNull(),
+        taxAmount: numeric("tax_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+        discount: numeric("discount", { precision: 15, scale: 2 }).default("0").notNull(),
+        total: numeric("total", { precision: 15, scale: 2 }).default("0").notNull(),
+
+        currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+        notes: text("notes"),
+        terms: text("terms"),
+
+        // Conversion to PO
+        purchaseOrderId: uuid("purchase_order_id"),
+
+        createdBy: uuid("created_by").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    },
+    (t) => [
+        index("rfqs_company_idx").on(t.companyId),
+        index("rfqs_vendor_idx").on(t.vendorId),
+        index("rfqs_status_idx").on(t.companyId, t.status),
+    ]
+);
+
+// ============================================================================
+// RFQ LINES
+// ============================================================================
+
+export const rfqLines = pgTable(
+    "rfq_lines",
+    {
+        id: uuid("id").defaultRandom().primaryKey(),
+        rfqId: uuid("rfq_id")
+            .notNull()
+            .references(() => rfqs.id, { onDelete: "cascade" }),
+        productId: uuid("product_id").references(() => products.id),
+        description: text("description").notNull(),
+        quantity: numeric("quantity", { precision: 15, scale: 4 }).default("1").notNull(),
+        unitPrice: numeric("unit_price", { precision: 15, scale: 2 }).default("0"), // filled after vendor quotes
+        discount: numeric("discount", { precision: 5, scale: 2 }).default("0"), // percentage
+        taxRate: numeric("tax_rate", { precision: 5, scale: 2 }).default("0"),
+        lineTotal: numeric("line_total", { precision: 15, scale: 2 }).default("0").notNull(),
+        sortOrder: integer("sort_order").default(0).notNull(),
+    },
+    (t) => [index("rfq_lines_rfq_idx").on(t.rfqId)]
+);
+
+// ============================================================================
 // RELATIONS
 // ============================================================================
 
@@ -243,4 +320,17 @@ export const vendorPaymentsRelations = relations(vendorPayments, ({ one }) => ({
     vendor: one(contacts, { fields: [vendorPayments.vendorId], references: [contacts.id] }),
     bill: one(vendorBills, { fields: [vendorPayments.vendorBillId], references: [vendorBills.id] }),
     createdByUser: one(users, { fields: [vendorPayments.createdBy], references: [users.id] }),
+}));
+
+export const rfqsRelations = relations(rfqs, ({ one, many }) => ({
+    company: one(companies, { fields: [rfqs.companyId], references: [companies.id] }),
+    vendor: one(contacts, { fields: [rfqs.vendorId], references: [contacts.id] }),
+    purchaseOrder: one(purchaseOrders, { fields: [rfqs.purchaseOrderId], references: [purchaseOrders.id] }),
+    createdByUser: one(users, { fields: [rfqs.createdBy], references: [users.id] }),
+    lines: many(rfqLines),
+}));
+
+export const rfqLinesRelations = relations(rfqLines, ({ one }) => ({
+    rfq: one(rfqs, { fields: [rfqLines.rfqId], references: [rfqs.id] }),
+    product: one(products, { fields: [rfqLines.productId], references: [products.id] }),
 }));

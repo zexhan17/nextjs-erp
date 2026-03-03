@@ -1,11 +1,13 @@
+import { cache } from "react";
 import { auth } from "@/lib/auth";
 import type { SessionUser } from "@/lib/types";
 
 /**
  * Get the current authenticated session user with company info.
  * Throws if not authenticated.
+ * Cached per-request via React cache() to avoid redundant auth() calls.
  */
-export async function getSessionUser(): Promise<SessionUser> {
+export const getSessionUser = cache(async (): Promise<SessionUser> => {
     const session = await auth();
     if (!session?.user?.id) {
         throw new Error("UNAUTHORIZED");
@@ -25,7 +27,7 @@ export async function getSessionUser(): Promise<SessionUser> {
         // @ts-expect-error — extended session
         companies: session.user.companies ?? [],
     };
-}
+});
 
 /**
  * Get session user or null (no throw).

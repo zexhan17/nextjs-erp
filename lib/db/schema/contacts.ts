@@ -83,6 +83,7 @@ export const contacts = pgTable(
         index("contacts_type_idx").on(t.companyId, t.type),
         index("contacts_name_idx").on(t.companyId, t.name),
         index("contacts_parent_idx").on(t.parentId),
+        index("contacts_company_created_idx").on(t.companyId, t.createdAt),
     ]
 );
 

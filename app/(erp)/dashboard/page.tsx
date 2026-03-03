@@ -89,11 +89,13 @@ async function getDashboardStats(companyId: string, enabledModules: string[]): P
                 vendors: sql<number>`count(*) filter (where ${contacts.type} in ('vendor','customer_vendor'))::int`,
             }).from(contacts).where(eq(contacts.companyId, companyId))
                 .then(([r]) => { stats.contacts = r?.total ?? 0; stats.customers = r?.customers ?? 0; stats.vendors = r?.vendors ?? 0; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ id: contacts.id, name: contacts.name, type: contacts.type, email: contacts.email, createdAt: contacts.createdAt })
                 .from(contacts).where(eq(contacts.companyId, companyId)).orderBy(desc(contacts.createdAt)).limit(5)
                 .then((rows) => { stats.recentContacts = rows; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
     }
 
@@ -103,39 +105,46 @@ async function getDashboardStats(companyId: string, enabledModules: string[]): P
             db.select({ count: sql<number>`count(*)::int`, total: sql<string>`COALESCE(SUM(${salesOrders.total}::numeric),0)::text` })
                 .from(salesOrders).where(and(eq(salesOrders.companyId, companyId), gte(salesOrders.orderDate, startOfMonth)))
                 .then(([r]) => { stats.salesCount = r?.count ?? 0; stats.salesTotal = r?.total ?? "0"; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ id: salesOrders.id, number: salesOrders.number, customer: contacts.name, total: salesOrders.total, status: salesOrders.status, date: salesOrders.orderDate })
                 .from(salesOrders).leftJoin(contacts, eq(salesOrders.customerId, contacts.id))
                 .where(eq(salesOrders.companyId, companyId)).orderBy(desc(salesOrders.createdAt)).limit(5)
                 .then((rows) => { stats.recentSalesOrders = rows.map((r) => ({ ...r, customer: r.customer ?? "Unknown" })); })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ count: sql<number>`count(*)::int`, total: sql<string>`COALESCE(SUM(${invoices.balanceDue}::numeric),0)::text` })
                 .from(invoices)
                 .where(and(eq(invoices.companyId, companyId), or(eq(invoices.status, "overdue"), and(lte(invoices.dueDate, now), eq(invoices.status, "sent")))))
                 .then(([r]) => { stats.overdueInvoices = r?.count ?? 0; stats.overdueAmount = r?.total ?? "0"; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ total: sql<string>`COALESCE(SUM(${payments.amount}::numeric),0)::text` })
                 .from(payments).where(and(eq(payments.companyId, companyId), gte(payments.paidAt, startOfMonth)))
                 .then(([r]) => { stats.paidInvoicesMonth = r?.total ?? "0"; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ id: invoices.id, number: invoices.number, customer: contacts.name, total: invoices.total, status: invoices.status, dueDate: invoices.dueDate })
                 .from(invoices).leftJoin(contacts, eq(invoices.customerId, contacts.id))
                 .where(eq(invoices.companyId, companyId)).orderBy(desc(invoices.createdAt)).limit(5)
                 .then((rows) => { stats.recentInvoices = rows.map((r) => ({ ...r, customer: r.customer ?? "Unknown" })); })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ status: invoices.status, count: sql<number>`count(*)::int`, total: sql<string>`COALESCE(SUM(${invoices.total}::numeric),0)::text` })
                 .from(invoices).where(eq(invoices.companyId, companyId)).groupBy(invoices.status)
                 .then((rows) => { stats.invoicesByStatus = rows; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ count: sql<number>`count(*)::int`, total: sql<string>`COALESCE(SUM(${quotations.total}::numeric),0)::text` })
                 .from(quotations).where(and(eq(quotations.companyId, companyId), or(eq(quotations.status, "draft"), eq(quotations.status, "sent"))))
                 .then(([r]) => { stats.pendingQuotations = r?.count ?? 0; stats.pendingQuotationsAmount = r?.total ?? "0"; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
     }
 
@@ -145,11 +154,13 @@ async function getDashboardStats(companyId: string, enabledModules: string[]): P
             db.select({ count: sql<number>`count(*)::int` }).from(products)
                 .where(and(eq(products.companyId, companyId), eq(products.isActive, true)))
                 .then(([r]) => { stats.productCount = r?.count ?? 0; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ count: sql<number>`count(*)::int` }).from(products)
                 .where(and(eq(products.companyId, companyId), eq(products.isActive, true), eq(products.trackInventory, true), sql`${products.currentStock}::numeric <= ${products.reorderLevel}::numeric`, sql`${products.reorderLevel}::numeric > 0`))
                 .then(([r]) => { stats.lowStockProducts = r?.count ?? 0; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
     }
 
@@ -159,11 +170,13 @@ async function getDashboardStats(companyId: string, enabledModules: string[]): P
             db.select({ count: sql<number>`count(*)::int`, total: sql<string>`COALESCE(SUM(${purchaseOrders.total}::numeric),0)::text` })
                 .from(purchaseOrders).where(and(eq(purchaseOrders.companyId, companyId), or(eq(purchaseOrders.status, "draft"), eq(purchaseOrders.status, "sent"), eq(purchaseOrders.status, "confirmed"))))
                 .then(([r]) => { stats.openPurchaseOrders = r?.count ?? 0; stats.openPOAmount = r?.total ?? "0"; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ total: sql<string>`COALESCE(SUM((${vendorBills.total}::numeric - ${vendorBills.amountPaid}::numeric)),0)::text` })
                 .from(vendorBills).where(and(eq(vendorBills.companyId, companyId), or(eq(vendorBills.status, "received"), eq(vendorBills.status, "partially_paid"), eq(vendorBills.status, "overdue"))))
                 .then(([r]) => { stats.unpaidBillsAmount = r?.total ?? "0"; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
     }
 
@@ -173,15 +186,17 @@ async function getDashboardStats(companyId: string, enabledModules: string[]): P
             db.select({ total: sql<string>`COALESCE(SUM(${chartOfAccounts.balance}::numeric),0)::text` })
                 .from(chartOfAccounts).where(and(eq(chartOfAccounts.companyId, companyId), eq(chartOfAccounts.type, "revenue")))
                 .then(([r]) => { stats.revenue = r?.total ?? "0"; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
         queries.push(
             db.select({ total: sql<string>`COALESCE(SUM(${chartOfAccounts.balance}::numeric),0)::text` })
                 .from(chartOfAccounts).where(and(eq(chartOfAccounts.companyId, companyId), eq(chartOfAccounts.type, "expense")))
                 .then(([r]) => { stats.expenses = r?.total ?? "0"; })
+                .catch(() => { /* Silently fail, use defaults */ })
         );
     }
 
-    await Promise.all(queries);
+    await Promise.allSettled(queries);
     return stats;
 }
 

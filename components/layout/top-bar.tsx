@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -43,14 +44,16 @@ export function TopBar({ user, enabledModules, notifications }: TopBarProps) {
             <Breadcrumb>
                 <BreadcrumbList>
                     {breadcrumbs.map((crumb, index) => (
-                        <BreadcrumbItem key={crumb.href}>
+                        <React.Fragment key={crumb.href}>
                             {index > 0 && <BreadcrumbSeparator />}
-                            {crumb.isLast ? (
-                                <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
-                            ) : (
-                                <BreadcrumbLink href={crumb.href}>{crumb.label}</BreadcrumbLink>
-                            )}
-                        </BreadcrumbItem>
+                            <BreadcrumbItem>
+                                {crumb.isLast ? (
+                                    <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
+                                ) : (
+                                    <BreadcrumbLink href={crumb.href}>{crumb.label}</BreadcrumbLink>
+                                )}
+                            </BreadcrumbItem>
+                        </React.Fragment>
                     ))}
                 </BreadcrumbList>
             </Breadcrumb>

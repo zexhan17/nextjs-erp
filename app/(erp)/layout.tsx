@@ -20,8 +20,20 @@ export default async function ERPLayout({ children }: { children: React.ReactNod
         redirect("/login");
     }
 
-    const enabledModules = await getCompanyModules(user.activeCompanyId);
-    const notifications = await generateNotifications(user.activeCompanyId, enabledModules);
+    let enabledModules: Awaited<ReturnType<typeof getCompanyModules>> = [];
+    try {
+        enabledModules = await getCompanyModules(user.activeCompanyId);
+    } catch (err) {
+        console.error("[ERPLayout] Failed to load company modules:", err);
+    }
+
+    // Load notifications with error handling — don't crash layout on failure
+    let notifications: Awaited<ReturnType<typeof generateNotifications>> = [];
+    try {
+        notifications = await generateNotifications(user.activeCompanyId, enabledModules);
+    } catch (err) {
+        console.error("[ERPLayout] Failed to load notifications:", err);
+    }
 
     return (
         <SidebarProvider>

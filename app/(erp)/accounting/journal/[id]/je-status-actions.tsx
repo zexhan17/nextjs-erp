@@ -2,8 +2,10 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { postJournalEntryAction, cancelJournalEntryAction, deleteJournalEntryAction } from "../../actions";
 import { Button } from "@/components/ui/button";
+import { Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 export function JEStatusActions({
@@ -55,6 +57,12 @@ export function JEStatusActions({
 
     return (
         <div className="flex items-center gap-2">
+            <Link href={`/accounting/journal/${entryId}/edit`}>
+                <Button variant="outline" disabled={isPending}>
+                    <Pencil className="mr-2 size-4" />
+                    Edit
+                </Button>
+            </Link>
             <Button onClick={handlePost} disabled={isPending}>
                 Post Entry
             </Button>

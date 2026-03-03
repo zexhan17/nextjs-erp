@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { createAccountAction, deleteAccountAction, updateAccountAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,7 +37,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, MoreHorizontal, Search, Pencil } from "lucide-react";
+import { Plus, MoreHorizontal, Search, Pencil, BookOpen } from "lucide-react";
 import { toast } from "sonner";
 
 const typeColors: Record<string, string> = {
@@ -228,6 +229,12 @@ export function AccountsClient({ accounts }: { accounts: Account[] }) {
                                                 </Button>
                                             </DropdownMenuTrigger>
                                             <DropdownMenuContent align="end">
+                                                <DropdownMenuItem asChild>
+                                                    <Link href={`/accounting/accounts/${account.id}`}>
+                                                        <BookOpen className="mr-2 size-4" />
+                                                        View Ledger
+                                                    </Link>
+                                                </DropdownMenuItem>
                                                 <DropdownMenuItem onClick={() => openEdit(account)}>
                                                     <Pencil className="mr-2 size-4" />
                                                     Edit

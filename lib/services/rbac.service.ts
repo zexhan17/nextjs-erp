@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { db } from "@/lib/db";
 import { userRoles, rolePermissions, permissions, companyModules } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
@@ -69,20 +70,31 @@ export async function getUserPermissions(
 
 /**
  * Get enabled modules for a company.
+ * Cached per-request via React cache() to deduplicate across layout + page.
+ * Retries once on transient errors (e.g. Neon cold-start timeouts).
  */
-export async function getCompanyModules(companyId: string): Promise<ModuleCode[]> {
-    const rows = await db
-        .select({ moduleCode: companyModules.moduleCode })
-        .from(companyModules)
-        .where(
-            and(
-                eq(companyModules.companyId, companyId),
-                eq(companyModules.isEnabled, true)
-            )
-        );
+export const getCompanyModules = cache(async (companyId: string): Promise<ModuleCode[]> => {
+    const query = () =>
+        db
+            .select({ moduleCode: companyModules.moduleCode })
+            .from(companyModules)
+            .where(
+                and(
+                    eq(companyModules.companyId, companyId),
+                    eq(companyModules.isEnabled, true)
+                )
+            );
+
+    let rows;
+    try {
+        rows = await query();
+    } catch {
+        // Retry once — handles Neon cold-start ETIMEDOUT
+        rows = await query();
+    }
 
     return rows.map((r) => r.moduleCode) as ModuleCode[];
-}
+});
 
 /**
  * Check if a module is enabled for a company.

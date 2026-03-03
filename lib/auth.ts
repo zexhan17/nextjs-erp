@@ -47,17 +47,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }),
     ],
     callbacks: {
-        async jwt({ token, user }) {
-            if (user) {
-                token.id = user.id;
-            }
-            return token;
-        },
-        async session({ session, token }) {
-            if (token?.id) {
-                const userId = token.id as string;
+        async jwt({ token, user, trigger }) {
+            // Only fetch from DB on sign-in or explicit update — NOT on every request
+            if (user || trigger === "update") {
+                const userId = (user?.id ?? token.id) as string;
+                token.id = userId;
 
-                // Get user with companies
                 const [dbUser] = await db
                     .select()
                     .from(users)
@@ -65,6 +60,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                     .limit(1);
 
                 if (dbUser) {
+                    token.email = dbUser.email;
+                    token.name = dbUser.name;
+                    token.picture = dbUser.avatar;
+                    token.isSuperAdmin = dbUser.isSuperAdmin;
+
                     const membershipRows = await db
                         .select({
                             companyId: userCompanies.companyId,
@@ -72,7 +72,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                             companySlug: companies.slug,
                             isOwner: userCompanies.isOwner,
                             isDefault: userCompanies.isDefault,
-                            isActive: userCompanies.isActive,
                         })
                         .from(userCompanies)
                         .innerJoin(companies, eq(userCompanies.companyId, companies.id))
@@ -91,22 +90,29 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                         isDefault: r.isDefault,
                     }));
 
-                    // Determine active company
                     const defaultCompany = userCompanyList.find((c) => c.isDefault) || userCompanyList[0];
-
-                    session.user.id = dbUser.id;
-                    session.user.email = dbUser.email;
-                    session.user.name = dbUser.name;
-                    session.user.image = dbUser.avatar;
-                    // @ts-expect-error — extending session type
-                    session.user.isSuperAdmin = dbUser.isSuperAdmin;
-                    // @ts-expect-error — extending session type
-                    session.user.activeCompanyId = defaultCompany?.id ?? null;
-                    // @ts-expect-error — extending session type
-                    session.user.activeCompanyName = defaultCompany?.name ?? null;
-                    // @ts-expect-error — extending session type
-                    session.user.companies = userCompanyList;
+                    token.activeCompanyId = defaultCompany?.id ?? null;
+                    token.activeCompanyName = defaultCompany?.name ?? null;
+                    token.companies = userCompanyList;
                 }
+            }
+            return token;
+        },
+        async session({ session, token }) {
+            // Read everything from the token — zero DB queries
+            if (token?.id) {
+                session.user.id = token.id as string;
+                session.user.email = token.email as string;
+                session.user.name = token.name as string;
+                session.user.image = token.picture as string | undefined;
+                // @ts-expect-error — extending session type
+                session.user.isSuperAdmin = token.isSuperAdmin ?? false;
+                // @ts-expect-error — extending session type
+                session.user.activeCompanyId = token.activeCompanyId ?? null;
+                // @ts-expect-error — extending session type
+                session.user.activeCompanyName = token.activeCompanyName ?? null;
+                // @ts-expect-error — extending session type
+                session.user.companies = token.companies ?? [];
             }
             return session;
         },

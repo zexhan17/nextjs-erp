@@ -7,6 +7,8 @@ import {
     vendorBills,
     vendorBillLines,
     vendorPayments,
+    rfqs,
+    rfqLines,
     contacts,
     sequences,
 } from "@/lib/db/schema";
@@ -674,4 +676,408 @@ export async function deleteVendorPaymentAction(id: string) {
     revalidatePath("/purchase/payments");
     revalidatePath("/purchase/bills");
     return { success: true };
+}
+
+// ============================================================================
+// RFQs — LIST
+// ============================================================================
+
+export interface RFQFilters {
+    page?: number;
+    limit?: number;
+    search?: string;
+    status?: string;
+}
+
+export async function getRFQsAction(filters: RFQFilters) {
+    const user = await getSessionUser();
+    if (!user.activeCompanyId) return { data: [], total: 0 };
+
+    const page = filters.page ?? 1;
+    const limit = filters.limit ?? 25;
+    const offset = (page - 1) * limit;
+
+    const conditions: SQL[] = [eq(rfqs.companyId, user.activeCompanyId)];
+
+    if (filters.search) {
+        conditions.push(
+            or(
+                ilike(rfqs.number, `%${filters.search}%`),
+                ilike(contacts.name, `%${filters.search}%`)
+            )!
+        );
+    }
+    if (filters.status && filters.status !== "all") {
+        conditions.push(
+            eq(rfqs.status, filters.status as "draft" | "sent" | "quoted" | "accepted" | "rejected" | "expired")
+        );
+    }
+
+    const where = and(...conditions);
+
+    const [data, countResult] = await Promise.all([
+        db
+            .select({
+                id: rfqs.id,
+                number: rfqs.number,
+                status: rfqs.status,
+                date: rfqs.date,
+                validUntil: rfqs.validUntil,
+                total: rfqs.total,
+                currency: rfqs.currency,
+                vendorName: contacts.name,
+                vendorId: rfqs.vendorId,
+            })
+            .from(rfqs)
+            .innerJoin(contacts, eq(contacts.id, rfqs.vendorId))
+            .where(where)
+            .orderBy(desc(rfqs.date))
+            .limit(limit)
+            .offset(offset),
+        db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(rfqs)
+            .innerJoin(contacts, eq(contacts.id, rfqs.vendorId))
+            .where(where),
+    ]);
+
+    return { data, total: countResult[0]?.count ?? 0 };
+}
+
+// ============================================================================
+// RFQs — SINGLE (with lines)
+// ============================================================================
+
+export async function getRFQAction(id: string) {
+    const user = await getSessionUser();
+    if (!user.activeCompanyId) return null;
+
+    const [rfq] = await db
+        .select({
+            id: rfqs.id,
+            companyId: rfqs.companyId,
+            number: rfqs.number,
+            vendorId: rfqs.vendorId,
+            vendorName: contacts.name,
+            vendorEmail: contacts.email,
+            status: rfqs.status,
+            date: rfqs.date,
+            validUntil: rfqs.validUntil,
+            subtotal: rfqs.subtotal,
+            taxAmount: rfqs.taxAmount,
+            discount: rfqs.discount,
+            total: rfqs.total,
+            currency: rfqs.currency,
+            notes: rfqs.notes,
+            terms: rfqs.terms,
+            purchaseOrderId: rfqs.purchaseOrderId,
+            createdAt: rfqs.createdAt,
+            updatedAt: rfqs.updatedAt,
+        })
+        .from(rfqs)
+        .innerJoin(contacts, eq(contacts.id, rfqs.vendorId))
+        .where(and(eq(rfqs.id, id), eq(rfqs.companyId, user.activeCompanyId)))
+        .limit(1);
+
+    if (!rfq) return null;
+
+    const lines = await db
+        .select()
+        .from(rfqLines)
+        .where(eq(rfqLines.rfqId, id))
+        .orderBy(asc(rfqLines.sortOrder));
+
+    return { ...rfq, lines };
+}
+
+// ============================================================================
+// RFQs — CREATE
+// ============================================================================
+
+export async function createRFQAction(formData: FormData) {
+    const user = await getSessionUser();
+    if (!user.activeCompanyId) return { error: "No active company" };
+
+    const vendorId = formData.get("vendorId") as string;
+    if (!vendorId) return { error: "Vendor is required" };
+
+    const number = await getNextSequence(user.activeCompanyId, "RFQ");
+
+    const lineCount = parseInt(formData.get("lineCount") as string, 10) || 0;
+    const lines: {
+        productId: string | null;
+        description: string;
+        quantity: string;
+        discount: string;
+        taxRate: string;
+    }[] = [];
+
+    for (let i = 0; i < lineCount; i++) {
+        const desc = formData.get(`lines[${i}].description`) as string;
+        if (!desc?.trim()) continue;
+        lines.push({
+            productId: (formData.get(`lines[${i}].productId`) as string) || null,
+            description: desc.trim(),
+            quantity: (formData.get(`lines[${i}].quantity`) as string) || "1",
+            discount: (formData.get(`lines[${i}].discount`) as string) || "0",
+            taxRate: (formData.get(`lines[${i}].taxRate`) as string) || "0",
+        });
+    }
+
+    // Calculate totals
+    const lineItems = lines.map((line) => {
+        const qty = parseFloat(line.quantity) || 1;
+        const discount = parseFloat(line.discount) || 0;
+        const lineSubtotal = qty * 0; // No unit price at RFQ stage
+        const lineTotal = lineSubtotal * (1 - discount / 100);
+        return {
+            subtotal: lineSubtotal,
+            taxRate: parseFloat(line.taxRate) || 0,
+            lineTotal,
+        };
+    });
+
+    const subtotal = lineItems.reduce((sum, l) => sum + l.subtotal, 0);
+    const discountAmount = parseFloat(formData.get("discount") as string) || 0;
+    const taxAmount = lineItems.reduce((sum, l) => sum + (l.lineTotal * l.taxRate) / 100, 0);
+    const total = subtotal - discountAmount + taxAmount;
+
+    const [created] = await db
+        .insert(rfqs)
+        .values({
+            companyId: user.activeCompanyId,
+            number,
+            vendorId,
+            date: formData.get("date") ? new Date(formData.get("date") as string) : new Date(),
+            validUntil: formData.get("validUntil") ? new Date(formData.get("validUntil") as string) : null,
+            subtotal: String(subtotal),
+            taxAmount: String(taxAmount),
+            discount: String(discountAmount),
+            total: String(total),
+            currency: (formData.get("currency") as string) || "USD",
+            notes: formData.get("notes")?.toString().trim() || null,
+            terms: formData.get("terms")?.toString().trim() || null,
+            createdBy: user.id,
+        })
+        .returning();
+
+    if (lines.length > 0) {
+        await db.insert(rfqLines).values(
+            lines.map((line, i) => ({
+                rfqId: created.id,
+                productId: line.productId || null,
+                description: line.description,
+                quantity: line.quantity,
+                discount: line.discount,
+                taxRate: line.taxRate,
+                lineTotal: String(lineItems[i]!.lineTotal),
+                sortOrder: i,
+            }))
+        );
+    }
+
+    revalidatePath("/purchase/rfqs");
+    return { success: true, rfqId: created.id };
+}
+
+// ============================================================================
+// RFQs — UPDATE
+// ============================================================================
+
+export async function updateRFQAction(id: string, formData: FormData) {
+    const user = await getSessionUser();
+    if (!user.activeCompanyId) return { error: "No active company" };
+
+    const [rfq] = await db
+        .select()
+        .from(rfqs)
+        .where(and(eq(rfqs.id, id), eq(rfqs.companyId, user.activeCompanyId)))
+        .limit(1);
+
+    if (!rfq) return { error: "RFQ not found" };
+
+    const vendorId = formData.get("vendorId") as string;
+    if (!vendorId) return { error: "Vendor is required" };
+
+    const lineCount = parseInt(formData.get("lineCount") as string, 10) || 0;
+    const lines: {
+        productId: string | null;
+        description: string;
+        quantity: string;
+        unitPrice: string;
+        discount: string;
+        taxRate: string;
+    }[] = [];
+
+    for (let i = 0; i < lineCount; i++) {
+        const desc = formData.get(`lines[${i}].description`) as string;
+        if (!desc?.trim()) continue;
+        lines.push({
+            productId: (formData.get(`lines[${i}].productId`) as string) || null,
+            description: desc.trim(),
+            quantity: (formData.get(`lines[${i}].quantity`) as string) || "1",
+            unitPrice: (formData.get(`lines[${i}].unitPrice`) as string) || "0",
+            discount: (formData.get(`lines[${i}].discount`) as string) || "0",
+            taxRate: (formData.get(`lines[${i}].taxRate`) as string) || "0",
+        });
+    }
+
+    // Calculate totals
+    const lineItems = lines.map((line) => {
+        const qty = parseFloat(line.quantity) || 1;
+        const unitPrice = parseFloat(line.unitPrice) || 0;
+        const discount = parseFloat(line.discount) || 0;
+        const lineSubtotal = qty * unitPrice;
+        const lineTotal = lineSubtotal * (1 - discount / 100);
+        return {
+            subtotal: lineSubtotal,
+            taxRate: parseFloat(line.taxRate) || 0,
+            lineTotal,
+        };
+    });
+
+    const subtotal = lineItems.reduce((sum, l) => sum + l.subtotal, 0);
+    const discountAmount = parseFloat(formData.get("discount") as string) || 0;
+    const taxAmount = lineItems.reduce((sum, l) => sum + (l.lineTotal * l.taxRate) / 100, 0);
+    const total = subtotal - discountAmount + taxAmount;
+
+    await db
+        .update(rfqs)
+        .set({
+            vendorId,
+            date: formData.get("date") ? new Date(formData.get("date") as string) : rfq.date,
+            validUntil: formData.get("validUntil") ? new Date(formData.get("validUntil") as string) : rfq.validUntil,
+            subtotal: String(subtotal),
+            taxAmount: String(taxAmount),
+            discount: String(discountAmount),
+            total: String(total),
+            currency: (formData.get("currency") as string) || rfq.currency,
+            notes: formData.get("notes")?.toString().trim() || null,
+            terms: formData.get("terms")?.toString().trim() || null,
+            updatedAt: new Date(),
+        })
+        .where(eq(rfqs.id, id));
+
+    // Update lines
+    await db.delete(rfqLines).where(eq(rfqLines.rfqId, id));
+    if (lines.length > 0) {
+        await db.insert(rfqLines).values(
+            lines.map((line, i) => ({
+                rfqId: id,
+                productId: line.productId || null,
+                description: line.description,
+                quantity: line.quantity,
+                unitPrice: line.unitPrice,
+                discount: line.discount,
+                taxRate: line.taxRate,
+                lineTotal: String(lineItems[i]!.lineTotal),
+                sortOrder: i,
+            }))
+        );
+    }
+
+    revalidatePath("/purchase/rfqs");
+    revalidatePath(`/purchase/rfqs/${id}`);
+    return { success: true };
+}
+
+// ============================================================================
+// RFQs — UPDATE STATUS
+// ============================================================================
+
+export async function updateRFQStatusAction(id: string, status: string) {
+    const user = await getSessionUser();
+    if (!user.activeCompanyId) return { error: "No active company" };
+
+    const validStatuses = ["draft", "sent", "quoted", "accepted", "rejected", "expired"];
+    if (!validStatuses.includes(status)) return { error: "Invalid status" };
+
+    await db
+        .update(rfqs)
+        .set({ status: status as any, updatedAt: new Date() })
+        .where(and(eq(rfqs.id, id), eq(rfqs.companyId, user.activeCompanyId)));
+
+    revalidatePath("/purchase/rfqs");
+    revalidatePath(`/purchase/rfqs/${id}`);
+    return { success: true };
+}
+
+// ============================================================================
+// RFQs — DELETE
+// ============================================================================
+
+export async function deleteRFQAction(id: string) {
+    const user = await getSessionUser();
+    if (!user.activeCompanyId) return { error: "No active company" };
+
+    const [rfq] = await db
+        .select()
+        .from(rfqs)
+        .where(and(eq(rfqs.id, id), eq(rfqs.companyId, user.activeCompanyId)))
+        .limit(1);
+
+    if (!rfq) return { error: "RFQ not found" };
+    if (rfq.status !== "draft") return { error: "Only draft RFQs can be deleted" };
+
+    await db.delete(rfqs).where(eq(rfqs.id, id));
+    revalidatePath("/purchase/rfqs");
+    return { success: true };
+}
+
+// ============================================================================
+// RFQs — CONVERT TO PURCHASE ORDER
+// ============================================================================
+
+export async function createPurchaseOrderFromRFQAction(rfqId: string) {
+    const user = await getSessionUser();
+    if (!user.activeCompanyId) return { error: "No active company" };
+
+    const rfqData = await getRFQAction(rfqId);
+    if (!rfqData) return { error: "RFQ not found" };
+
+    const poNumber = await getNextSequence(user.activeCompanyId, "PO");
+
+    const [po] = await db
+        .insert(purchaseOrders)
+        .values({
+            companyId: user.activeCompanyId,
+            number: poNumber,
+            vendorId: rfqData.vendorId,
+            orderDate: new Date(),
+            expectedDate: rfqData.validUntil || null,
+            subtotal: rfqData.subtotal,
+            taxAmount: rfqData.taxAmount,
+            discount: rfqData.discount,
+            total: rfqData.total,
+            currency: rfqData.currency,
+            shippingAddress: null,
+            notes: rfqData.notes,
+            terms: rfqData.terms,
+            createdBy: user.id,
+        })
+        .returning();
+
+    // Copy lines
+    if (rfqData.lines && rfqData.lines.length > 0) {
+        await db.insert(purchaseOrderLines).values(
+            rfqData.lines.map((line, i) => ({
+                purchaseOrderId: po.id,
+                productId: line.productId || null,
+                description: line.description,
+                quantity: line.quantity,
+                unitPrice: line.unitPrice,
+                discount: line.discount,
+                taxRate: line.taxRate,
+                lineTotal: line.lineTotal,
+                sortOrder: i,
+            }))
+        );
+    }
+
+    // Link RFQ to PO
+    await db.update(rfqs).set({ purchaseOrderId: po.id }).where(eq(rfqs.id, rfqId));
+
+    revalidatePath("/purchase/rfqs");
+    revalidatePath("/purchase/orders");
+    return { success: true, poId: po.id };
 }
